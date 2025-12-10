@@ -1,0 +1,142 @@
+---
+title: "Higher education across countries"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+toc: TRUE
+---
+
+```{r setup}
+#| message: false
+#| warning: false
+
+library(tidyverse)
+library(rvest)
+library(lmerTest)
+library(sjPlot)
+library(performance)
+
+set_theme(theme_light())
+
+```
+
+# Scraping data from KSH homepage
+
+```{r}
+he_raw <- 
+    read_html("https://www.ksh.hu/stadat_files/okt/hu/okt0044.html") |> 
+    html_table(header = FALSE, na.strings = "..") |>
+    _[[1]]
+
+he_names <- paste0(he_raw[2,], "_", he_raw[3,])
+
+he_wide <-
+    he_raw |> 
+    slice(-c(1:3)) |> 
+    set_names(he_names) |> 
+    rename(Ország = Ország_Ország) |> 
+    mutate(across(-Ország, ~str_remove_all(., " ") |> 
+                            str_replace(",", ".") |> 
+                            parse_number()
+                  ))
+
+he_long <-
+    he_wide |> 
+    pivot_longer(-Ország, 
+                 names_to = c("quantity", "year"),
+                 names_sep = "_"
+                 ) |> 
+    mutate(year = as.numeric(year)) |>
+    mutate(covid = case_when(year < 2020 | year > 2022 ~ FALSE,
+                            TRUE ~ TRUE))
+```
+
+# Plotting the proportion of higher education students across countries
+
+```{r}
+
+he_long |> 
+    filter(quantity == "aránya az össznépesség %-ában",
+           year == 2019) |> 
+    mutate(Ország = fct_reorder(Ország, value)) |> 
+    ggplot() +
+    aes(y = Ország, x = value) +
+    geom_col() +
+    labs(title = "Felsőoktatásban tanulók aránya az össznépesség %-ában",
+         x = "%",
+         y = NULL)
+
+```
+
+# Plotting trends over time for selected countries
+
+```{r}
+
+he_long |> 
+    filter(Ország %in% c("Szlovákia", "Románia", "Ausztria", "Szlovénia", "Bulgária", "Csehország", "Lengyelország", "Magyarország"),
+           quantity == "aránya az össznépesség %-ában",
+           ) |> 
+    ggplot() +
+    aes(x = year, y = value, color = Ország, group = Ország) +
+    geom_point() +
+    geom_line(linewidth = 1.1, alpha = .7) +
+    scale_x_continuous(breaks = scales::pretty_breaks()) +
+    labs(title = "Felsőoktatásban tanulók arányának változása 2013-2023",
+         x = NULL,
+         y = "%")
+    
+```
+
+# Plotting average trends over time for all countries
+
+```{r}
+he_long |> 
+    group_by(year, quantity) |> 
+    summarise(avg = mean(value, na.rm = TRUE),
+              sd = mean(value, na.rm = TRUE),
+              se = sd/sqrt(n())
+              ) |> 
+    ggplot() +
+    aes(x = year, y = avg, ymin = avg - se, ymax = avg + se,
+        color = quantity) +
+    geom_line(linewidth = 1.1, show.legend = FALSE) +
+    geom_pointrange(show.legend = FALSE) +
+    facet_wrap(~quantity, scales ="free_y") +
+    scale_x_continuous(breaks = scales::pretty_breaks()) +
+    labs(x = NULL)
+
+```
+
+# Statistical analysis: t-test
+
+```{r}
+
+he_long |> 
+    filter(quantity == "aránya az össznépesség %-ában") |> 
+    group_by(Ország, covid) |> 
+    summarise(avg = mean(value, na.rm = TRUE)) |> 
+    t.test(avg ~ covid, data = _)
+    
+```
+
+# Statistical analysis: linear mixed-effects model
+
+```{r}
+covid_lmer <-
+    he_long |> 
+    filter(quantity == "aránya az össznépesség %-ában") |> 
+    lmer(value ~ scale(year, scale = FALSE) * covid + (covid|Ország), data = _)
+
+tab_model(covid_lmer)
+
+check_model(covid_lmer)
+
+```
+
+
+
+
+
+
+
